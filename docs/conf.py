@@ -119,7 +119,8 @@ nb_execution_timeout = 100
 # files that will not be executed.
 myst_enable_extensions = ['dollarmath']
 nb_execution_excludepatterns = [
-  'notebooks/annotated_mnist.ipynb', # <-- times out 
+  'notebooks/annotated_mnist.ipynb', # <-- times out
+  'notebooks/optax_update_guide.ipynb', # requires flax==0.5.2
 ]
 # raise exceptions on execution so CI can catch errors
 nb_execution_allow_errors = False

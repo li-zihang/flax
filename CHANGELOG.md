@@ -26,6 +26,11 @@ vNext
 -
 -
 
+0.6.0
+-----
+
+- Removes deprecated optimizers in `flax.optim` package.
+
 0.5.2
 -----
 - Fixes missing PyYAML dependecy.
