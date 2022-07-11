@@ -30,7 +30,7 @@ import jax.numpy as jnp
 import ml_collections
 import numpy as np
 import tensorflow_datasets as tfds
-
+from functools import partial
 
 class CNN(nn.Module):
   """A simple CNN model."""
@@ -82,7 +82,7 @@ def compute_metrics(logits, labels):
   return metrics
 
 
-@jax.jit
+@partial(jax.jit, backend='cpu', donate_argnums=[0])
 def train_step(optimizer, batch):
   """Train for a single step."""
   def loss_fn(params):
@@ -141,8 +141,8 @@ def get_datasets():
   ds_builder.download_and_prepare()
   train_ds = tfds.as_numpy(ds_builder.as_dataset(split='train', batch_size=-1))
   test_ds = tfds.as_numpy(ds_builder.as_dataset(split='test', batch_size=-1))
-  train_ds['image'] = jnp.float32(train_ds['image']) / 255.
-  test_ds['image'] = jnp.float32(test_ds['image']) / 255.
+  train_ds['image'] = jnp.float32(train_ds['image'][0:1000]) / 255.
+  test_ds['image'] = jnp.float32(test_ds['image'][0:1000]) / 255.
   return train_ds, test_ds
 
 
@@ -159,8 +159,8 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
   train_ds, test_ds = get_datasets()
   rng = jax.random.PRNGKey(0)
 
-  summary_writer = tensorboard.SummaryWriter(workdir)
-  summary_writer.hparams(dict(config))
+  # summary_writer = tensorboard.SummaryWriter(workdir)
+  # summary_writer.hparams(dict(config))
 
   rng, init_rng = jax.random.split(rng)
   params = get_initial_params(init_rng)
@@ -171,15 +171,15 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
     rng, input_rng = jax.random.split(rng)
     optimizer, train_metrics = train_epoch(
         optimizer, train_ds, config.batch_size, epoch, input_rng)
-    loss, accuracy = eval_model(optimizer.target, test_ds)
+    # loss, accuracy = eval_model(optimizer.target, test_ds)
 
-    logging.info('eval epoch: %d, loss: %.4f, accuracy: %.2f',
-                 epoch, loss, accuracy * 100)
+    # logging.info('eval epoch: %d, loss: %.4f, accuracy: %.2f',
+    #              epoch, loss, accuracy * 100)
 
-    summary_writer.scalar('train_loss', train_metrics['loss'], epoch)
-    summary_writer.scalar('train_accuracy', train_metrics['accuracy'], epoch)
-    summary_writer.scalar('eval_loss', loss, epoch)
-    summary_writer.scalar('eval_accuracy', accuracy, epoch)
+    # summary_writer.scalar('train_loss', train_metrics['loss'], epoch)
+    # summary_writer.scalar('train_accuracy', train_metrics['accuracy'], epoch)
+    # summary_writer.scalar('eval_loss', loss, epoch)
+    # summary_writer.scalar('eval_accuracy', accuracy, epoch)
 
-  summary_writer.flush()
+  # summary_writer.flush()
   return optimizer
