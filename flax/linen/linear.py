@@ -306,11 +306,11 @@ class _Conv(Module):
     """Applies a (potentially unshared) convolution to the inputs.
 
     Args:
-      inputs: input data with dimensions (batch, spatial_dims..., features).
-        This is the channels-last convention, i.e. NHWC for a 2d convolution
-        and NDHWC for a 3D convolution. Note: this is different from the input
-        convention used by `lax.conv_general_dilated`, which puts the spatial
-        dimensions last.
+      inputs: input data with dimensions (*batch_dims, spatial_dims...,
+        features). This is the channels-last convention, i.e. NHWC for a 2d
+        convolution and NDHWC for a 3D convolution. Note: this is different from
+        the input convention used by `lax.conv_general_dilated`, which puts the
+        spatial dimensions last.
 
     Returns:
       The convolved data.
@@ -333,10 +333,12 @@ class _Conv(Module):
         return (x,) * len(kernel_size)
       return tuple(x)
 
-    is_single_input = False
-    if inputs.ndim == len(kernel_size) + 1:
-      is_single_input = True
-      inputs = jnp.expand_dims(inputs, axis=0)
+    # Combine all input batch dimensions into a single leading batch axis.
+    num_batch_dimensions = inputs.ndim - (len(kernel_size) + 1)
+    input_batch_shape = inputs.shape[:num_batch_dimensions]
+    total_batch_size = int(np.prod(input_batch_shape))
+    flat_input_shape = (total_batch_size,) + inputs.shape[num_batch_dimensions:]
+    inputs = jnp.reshape(inputs, flat_input_shape)
 
     # self.strides or (1,) * (inputs.ndim - 2)
     strides = maybe_broadcast(self.strides)
@@ -450,9 +452,8 @@ class _Conv(Module):
       bias = bias.reshape((1,) * (y.ndim - bias.ndim) + bias.shape)
       y += bias
 
-    if is_single_input:
-      y = jnp.squeeze(y, axis=0)
-    return y
+    output_shape = input_batch_shape + y.shape[1:]
+    return jnp.reshape(y, output_shape)
 
 
 class Conv(_Conv):
@@ -520,11 +521,11 @@ class ConvTranspose(Module):
     Behaviour mirrors of `jax.lax.conv_transpose`.
 
     Args:
-      inputs: input data with dimensions (batch, spatial_dims..., features).
-        This is the channels-last convention, i.e. NHWC for a 2d convolution
-        and NDHWC for a 3D convolution. Note: this is different from the input
-        convention used by `lax.conv_general_dilated`, which puts the spatial
-        dimensions last.
+      inputs: input data with dimensions (*batch_dims, spatial_dims...,
+        features). This is the channels-last convention, i.e. NHWC for a 2d
+        convolution and NDHWC for a 3D convolution. Note: this is different from
+        the input convention used by `lax.conv_general_dilated`, which puts the
+        spatial dimensions last.
 
     Returns:
       The convolved data.
@@ -535,10 +536,12 @@ class ConvTranspose(Module):
     else:
       kernel_size = self.kernel_size
 
-    is_single_input = False
-    if inputs.ndim == len(kernel_size) + 1:
-      is_single_input = True
-      inputs = jnp.expand_dims(inputs, axis=0)
+    # Combine all input batch dimensions into a single leading batch axis.
+    num_batch_dimensions = inputs.ndim - (len(kernel_size) + 1)
+    input_batch_shape = inputs.shape[:num_batch_dimensions]
+    total_batch_size = int(np.prod(input_batch_shape))
+    flat_input_shape = (total_batch_size,) + inputs.shape[num_batch_dimensions:]
+    inputs = jnp.reshape(inputs, flat_input_shape)
 
     strides: Tuple[int, ...]
     strides = self.strides or (1,) * (inputs.ndim - 2)
@@ -611,11 +614,11 @@ class ConvTranspose(Module):
                       y.shape[i + 1:])
         y = y.sum(axis=i)
 
-    if is_single_input:
-      y = jnp.squeeze(y, axis=0)
     if self.use_bias:
       y += jnp.reshape(bias, (1,) * (y.ndim - 1) + (-1,))
-    return y
+
+    output_shape = input_batch_shape + y.shape[1:]
+    return jnp.reshape(y, output_shape)
 
 
 default_embed_init = variance_scaling(1.0, 'fan_in', 'normal', out_axis=0)
