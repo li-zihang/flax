@@ -273,6 +273,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     input_dtype = tf.float32
 
   dataset_builder = tfds.builder(config.dataset)
+  dataset_builder.download_and_prepare()
   train_iter = create_input_iter(
       dataset_builder, local_batch_size, image_size, input_dtype, train=True,
       cache=config.cache)
@@ -313,13 +314,25 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   learning_rate_fn = create_learning_rate_fn(
       config, base_learning_rate, steps_per_epoch)
 
-  p_train_step = jax.pmap(
-      functools.partial(train_step, model.apply,
-                        learning_rate_fn=learning_rate_fn),
-      axis_name='batch')
-  p_eval_step = jax.pmap(
-      functools.partial(eval_step, model.apply), axis_name='batch')
+  donate_argnums_flag = True
+  if(donate_argnums_flag == False):
+    # run training on IPU
+    p_train_step = jax.pmap(
+        functools.partial(train_step, model.apply,
+                          learning_rate_fn=learning_rate_fn),
+        axis_name='batch', backend='ipu')
+    p_eval_step = jax.pmap(
+        functools.partial(eval_step, model.apply), axis_name='batch', backend='ipu')
 
+  else:
+    # run training on IPU with donate argnums
+    p_train_step = jax.pmap(
+        functools.partial(train_step, model.apply,
+                          learning_rate_fn=learning_rate_fn),
+        axis_name='batch', backend='ipu', donate_argnums=[0])
+    p_eval_step = jax.pmap(
+        functools.partial(eval_step, model.apply), axis_name='batch', backend='ipu', donate_argnums=[0])
+  
   epoch_metrics = []
   hooks = []
   if jax.host_id() == 0:
@@ -355,20 +368,20 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
       state = sync_batch_stats(state)
       for _ in range(steps_per_eval):
         eval_batch = next(eval_iter)
-        metrics = p_eval_step(state, eval_batch)
-        eval_metrics.append(metrics)
-      eval_metrics = common_utils.get_metrics(eval_metrics)
-      summary = jax.tree_map(lambda x: x.mean(), eval_metrics)
-      logging.info('eval epoch: %d, loss: %.4f, accuracy: %.2f',
-                   epoch, summary['loss'], summary['accuracy'] * 100)
-      if jax.host_id() == 0:
-        for key, val in eval_metrics.items():
-          tag = 'eval_%s' % key
-          summary_writer.scalar(tag, val.mean(), step)
-        summary_writer.flush()
+        # metrics = p_eval_step(state, eval_batch)
+        # eval_metrics.append(metrics)
+      # eval_metrics = common_utils.get_metrics(eval_metrics)
+      # summary = jax.tree_map(lambda x: x.mean(), eval_metrics)
+      # logging.info('eval epoch: %d, loss: %.4f, accuracy: %.2f',
+      #              epoch, summary['loss'], summary['accuracy'] * 100)
+      # if jax.host_id() == 0:
+      #   for key, val in eval_metrics.items():
+      #     tag = 'eval_%s' % key
+      #     summary_writer.scalar(tag, val.mean(), step)
+      #   summary_writer.flush()
     if (step + 1) % steps_per_checkpoint == 0 or step + 1 == num_steps:
       state = sync_batch_stats(state)
-      save_checkpoint(state, workdir)
+      # save_checkpoint(state, workdir)
 
   # Wait until computations are done before exiting
   jax.random.normal(jax.random.PRNGKey(0), ()).block_until_ready()

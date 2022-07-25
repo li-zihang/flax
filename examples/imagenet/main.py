@@ -44,7 +44,7 @@ def main(argv):
 
   # Hide any GPUs form TensorFlow. Otherwise TF might reserve memory and make
   # it unavailable to JAX.
-  tf.config.experimental.set_visible_devices([], 'GPU')
+  tf.config.experimental.set_visible_devices([], 'IPU')
 
   logging.info('JAX host: %d / %d', jax.host_id(), jax.host_count())
   logging.info('JAX local devices: %r', jax.local_devices())
