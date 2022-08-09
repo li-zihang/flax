@@ -40,12 +40,12 @@ def get_config():
   config.reverse_translation = False
 
   # Per device batch size for training.
-  config.per_device_batch_size = 64
+  config.per_device_batch_size = 1
 
   # Beam size for inference.
   config.beam_size = 4
 
-  config.num_train_steps = 100_000
+  config.num_train_steps = 10_000
 
   # Number of steps to take during evaluation.
   config.num_eval_steps = 20
@@ -79,14 +79,14 @@ def get_config():
   config.logits_via_embedding = True
 
   # Number of transformer layers.
-  config.num_layers = 6
+  config.num_layers = 1
 
   # Size of query/key/value for attention.
-  config.qkv_dim = 1024
+  config.qkv_dim = 256
   # Size of embeddings.
-  config.emb_dim = 1024
+  config.emb_dim = 256
   # Size of the MLP.
-  config.mlp_dim = 4096
+  config.mlp_dim = 512
 
   # Number of attention heads.
   config.num_heads = 16
@@ -108,7 +108,7 @@ def get_config():
   config.eval_every_steps = 1_000
 
   # Use bfloat16 mixed precision training instead of float32.
-  config.use_bfloat16 = True
+  config.use_bfloat16 = False
 
   # Integer for PRNG random seed.
   config.seed = 0

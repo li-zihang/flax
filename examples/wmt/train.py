@@ -227,10 +227,11 @@ def train_step(optimizer,
   (_, logits), grad = grad_fn(optimizer.target)
   grad = jax.lax.pmean(grad, "batch")
   new_optimizer = optimizer.apply_gradient(grad, learning_rate=lr)
-  metrics = compute_metrics(logits, targets, weights)
-  metrics["learning_rate"] = lr
+  # metrics = compute_metrics(logits, targets, weights)
+  # metrics["learning_rate"] = lr
 
-  return new_optimizer, metrics
+  # return new_optimizer, metrics
+  return new_optimizer
 
 
 def eval_step(params, batch, config, label_smoothing=0.0):
@@ -511,22 +512,22 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
           config=train_config,
           learning_rate_fn=learning_rate_fn,
           label_smoothing=config.label_smoothing),
-      axis_name="batch",
+      axis_name="batch", backend="ipu",
       donate_argnums=(0,))  # pytype: disable=wrong-arg-types
   p_eval_step = jax.pmap(
       functools.partial(
           eval_step, config=eval_config),
-      axis_name="batch")
+      axis_name="batch", backend="cpu")
   p_init_cache = jax.pmap(
       functools.partial(
           initialize_cache,
           max_decode_len=config.max_predict_length,
-          config=predict_config),
+          config=predict_config, backend="cpu"),
       axis_name="batch")
   p_pred_step = jax.pmap(
       functools.partial(
           predict_step, config=predict_config, beam_size=config.beam_size),
-      axis_name="batch",
+      axis_name="batch", backend="cpu",
       static_broadcasted_argnums=(3, 4))  # eos token, max_length are constant
 
   # Main Train Loop
@@ -554,9 +555,9 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
       # Shard data to devices and do a training step.
       with jax.profiler.StepTraceContext("train", step_num=step):
         batch = common_utils.shard(jax.tree_map(np.asarray, next(train_iter)))
-        optimizer, metrics = p_train_step(
+        optimizer = p_train_step(
             optimizer, batch, dropout_rng=dropout_rngs)
-        train_metrics.append(metrics)
+        # train_metrics.append(metrics)
 
       # Quick indication that training is happening.
       logging.log_first_n(logging.INFO, "Finished training step %d.", 5, step)
@@ -565,17 +566,17 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
 
       # Periodic metric handling.
       if step % config.eval_every_steps == 0 or is_last_step:
-        with report_progress.timed("training_metrics"):
-          logging.info("Gathering training metrics.")
-          train_metrics = common_utils.get_metrics(train_metrics)
-          lr = train_metrics.pop("learning_rate").mean()
-          metrics_sums = jax.tree_map(jnp.sum, train_metrics)
-          denominator = metrics_sums.pop("denominator")
-          summary = jax.tree_map(lambda x: x / denominator, metrics_sums)  # pylint: disable=cell-var-from-loop
-          summary["learning_rate"] = lr
-          summary = {"train_" + k: v for k, v in summary.items()}
-          writer.write_scalars(step, summary)
-          train_metrics = []
+        # with report_progress.timed("training_metrics"):
+        #   logging.info("Gathering training metrics.")
+        #   train_metrics = common_utils.get_metrics(train_metrics)
+        #   lr = train_metrics.pop("learning_rate").mean()
+        #   metrics_sums = jax.tree_map(jnp.sum, train_metrics)
+        #   denominator = metrics_sums.pop("denominator")
+        #   summary = jax.tree_map(lambda x: x / denominator, metrics_sums)  # pylint: disable=cell-var-from-loop
+        #   summary["learning_rate"] = lr
+        #   summary = {"train_" + k: v for k, v in summary.items()}
+        #   writer.write_scalars(step, summary)
+        #   train_metrics = []
 
         with report_progress.timed("eval"):
           eval_results = evaluate(
@@ -586,21 +587,21 @@ def train_and_evaluate(config: ml_collections.ConfigDict, workdir: str):
           writer.write_scalars(
               step, {"eval_" + k: v for k, v in eval_results.items()})
 
-        with report_progress.timed("translate_and_bleu"):
-          exemplars, bleu_score = translate_and_calculate_bleu(
-              p_pred_step=p_pred_step,
-              p_init_cache=p_init_cache,
-              target=optimizer.target,
-              predict_ds=predict_ds,
-              decode_tokens=decode_tokens,
-              max_predict_length=config.max_predict_length)
-          writer.write_scalars(step, {"bleu": bleu_score})
-          writer.write_texts(step, {"samples": exemplars})
+      #   with report_progress.timed("translate_and_bleu"):
+      #     exemplars, bleu_score = translate_and_calculate_bleu(
+      #         p_pred_step=p_pred_step,
+      #         p_init_cache=p_init_cache,
+      #         target=optimizer.target,
+      #         predict_ds=predict_ds,
+      #         decode_tokens=decode_tokens,
+      #         max_predict_length=config.max_predict_length)
+      #     writer.write_scalars(step, {"bleu": bleu_score})
+      #     writer.write_texts(step, {"samples": exemplars})
 
       # Save a checkpoint on one host after every checkpoint_freq steps.
-      save_checkpoint = (step % config.checkpoint_every_steps == 0 or
-                         is_last_step)
-      if config.save_checkpoints and save_checkpoint and jax.host_id() == 0:
-        with report_progress.timed("checkpoint"):
-          checkpoints.save_checkpoint(workdir, jax_utils.unreplicate(optimizer),
-                                      step)
+      # save_checkpoint = (step % config.checkpoint_every_steps == 0 or
+      #                    is_last_step)
+      # if config.save_checkpoints and save_checkpoint and jax.host_id() == 0:
+      #   with report_progress.timed("checkpoint"):
+      #     checkpoints.save_checkpoint(workdir, jax_utils.unreplicate(optimizer),
+      #                                 step)
