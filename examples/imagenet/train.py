@@ -141,21 +141,22 @@ def train_step(apply_fn, state, batch, learning_rate_fn):
     # Re-use same axis_name as in the call to `pmap(...train_step...)` below.
   new_model_state, logits = aux[1]
   new_optimizer = optimizer.apply_gradient(grad, learning_rate=lr)
+
   metrics = compute_metrics(logits, batch[1])
   metrics['learning_rate'] = lr
+
 
   if dynamic_scale:
     # if is_fin == False the gradients contain Inf/NaNs and the old optimizer
     # state should be restored.
     new_optimizer = jax.tree_multimap(
         functools.partial(jnp.where, is_fin), new_optimizer, optimizer)
-    metrics['scale'] = dynamic_scale.scale
+    # metrics['scale'] = dynamic_scale.scale
 
   new_state = state.replace(
       step=step + 1, optimizer=new_optimizer, model_state=new_model_state,
       dynamic_scale=dynamic_scale)
   return new_state, (metrics["accuracy"], metrics["loss"])
-
 
 def eval_step(apply_fn, state, batch):
   params = state.optimizer.target
@@ -171,7 +172,6 @@ def prepare_tf_data(xs):
   def _prepare(x):
     # Use _numpy() for zero-copy conversion between TF and NumPy.
     x = x._numpy()  # pylint: disable=protected-access
-
     # Change data type from int64 to int32 as ipu-infeed does not take int64.
     if (len(x.shape) == 1):
       x = x.astype(np.int32)
@@ -287,14 +287,12 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
       dataset_builder.info.splits['train'].num_examples // config.batch_size
   )
 
-
   if config.steps_per_eval == -1:
     num_validation_examples = dataset_builder.info.splits[
         'validation'].num_examples
     steps_per_eval = num_validation_examples // config.batch_size
   else:
     steps_per_eval = config.steps_per_eval
-
 
   base_learning_rate = config.learning_rate * config.batch_size / 256.
 
@@ -356,7 +354,6 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     logging.info('Prepare train dataset!')
     for _, batch in zip(range(steps_per_epoch), train_iter):
       batch = tuple(batch.values())
-      # batch1 = (batch[0], batch[1].astype(jnp.int32))
       device.transfer_to_infeed(batch)
     logging.info('Finished train dataset!')
     state = train_loops(epoch * steps_per_epoch, (epoch + 1) * steps_per_epoch, state)
@@ -378,10 +375,8 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     logging.info('Prepare eval dataset!')
     for _, batch in zip(range(steps_per_eval), eval_iter):
       batch = tuple(batch.values())
-      # batch1 = (batch[0], batch[1].astype(jnp.int32))
       device.transfer_to_infeed(batch)
     logging.info('Finished eval dataset!')
-    
     state = eval_loops(0, steps_per_eval, state)
     for _ in range(steps_per_eval):
       eval_acc, eval_loss = device.transfer_from_outfeed(xla_client.shape_from_pyval((x, y))
