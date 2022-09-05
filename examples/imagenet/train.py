@@ -317,9 +317,9 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   p_train_step = jax.pmap(
       functools.partial(train_step, model.apply,
                         learning_rate_fn=learning_rate_fn),
-      axis_name='batch')
+      axis_name='batch', donate_argnums=[0])
   p_eval_step = jax.pmap(
-      functools.partial(eval_step, model.apply), axis_name='batch')
+      functools.partial(eval_step, model.apply), axis_name='batch', donate_argnums=[0])
 
   epoch_metrics = []
   hooks = []
