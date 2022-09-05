@@ -24,10 +24,8 @@ from typing import Any
 import threading
 
 from absl import logging
-from clu import periodic_actions
 
 import flax
-from flax import jax_utils
 from flax import optim
 
 import input_pipeline
@@ -220,7 +218,7 @@ def restore_checkpoint(state, workdir):
 def save_checkpoint(state, workdir):
   if jax.host_id() == 0:
     # get train state from the first replica
-    state = jax.device_get(jax.tree_map(lambda x: x[0], state))
+    state = jax.device_get(state)
     step = int(state.step)
     checkpoints.save_checkpoint(workdir, state, step, keep=3)
 
@@ -248,8 +246,7 @@ def create_train_state(rng, config: ml_collections.ConfigDict,
     dynamic_scale = None
 
   params, model_state = initialized(rng, image_size, model)
-  optimizer = optim.Momentum(
-      beta=config.momentum, nesterov=True).create(params)
+  optimizer = optim.GradientDescent().create(params)
   state = TrainState(
       step=0, optimizer=optimizer, model_state=model_state,
       dynamic_scale=dynamic_scale)
@@ -367,7 +364,6 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   device = jax.devices(backend='gpu')[0]
 
   epoch_metrics = []
-  t_loop_start = time.time()
   logging.info('Initial compilation, this might take some minutes...')
   for epoch in range(int(config.num_epochs)):
     # Train thread, calls a fori_loop
@@ -401,7 +397,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     # Eval thread, calls a fori_loop
     execution_eval = MyThread(eval_loops, args=(0, steps_per_eval, state))
     execution_eval.start()
-    t_loop_start = time.time()
+    e_loop_start = time.time()
 
     # Main program loop, infeed and outfeed data
     for _, batch in zip(range(steps_per_eval), eval_iter):
@@ -417,7 +413,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
                   epoch, summary['loss'], summary['accuracy'] * 100)
     
     execution_eval.join()
-    eval_time = time.time() - t_loop_start
+    eval_time = time.time() - e_loop_start
     logging.info("Eval epoch %d in %.2f sec", epoch, eval_time)
     
     if (epoch + 1) % 10 == 0:
