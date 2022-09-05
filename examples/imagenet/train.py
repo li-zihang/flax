@@ -57,7 +57,7 @@ def create_model(*, model_cls, half_precision, **kwargs):
       model_dtype = jnp.float16
   else:
     model_dtype = jnp.float32
-  return model_cls(num_classes=1000, dtype=model_dtype, **kwargs)
+  return model_cls(num_classes=10, dtype=model_dtype, **kwargs)
 
 
 def initialized(key, image_size, model):
@@ -72,7 +72,7 @@ def initialized(key, image_size, model):
 
 def cross_entropy_loss(logits, labels):
   return -jnp.sum(
-      common_utils.onehot(labels, num_classes=1000) * logits) / labels.size
+      common_utils.onehot(labels, num_classes=10) * logits) / labels.size
 
 
 def compute_metrics(logits, labels):
@@ -273,6 +273,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     input_dtype = tf.float32
 
   dataset_builder = tfds.builder(config.dataset)
+  dataset_builder.download_and_prepare()
   train_iter = create_input_iter(
       dataset_builder, local_batch_size, image_size, input_dtype, train=True,
       cache=config.cache)
