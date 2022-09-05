@@ -51,3 +51,7 @@ def get_metrics(device_metrics):
   device_metrics = jax.tree_map(lambda x: x[0], device_metrics)
   metrics_np = jax.device_get(device_metrics)
   return stack_forest(metrics_np)
+
+def get_metrics_single_device(device_metrics):
+  metrics_np = jax.device_get(device_metrics)
+  return stack_forest(metrics_np)

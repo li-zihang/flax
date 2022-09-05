@@ -82,7 +82,6 @@ def compute_metrics(logits, labels):
       'loss': loss,
       'accuracy': accuracy,
   }
-  metrics = lax.pmean(metrics, axis_name='batch')
   return metrics
 
 
@@ -137,7 +136,6 @@ def train_step(apply_fn, state, batch, learning_rate_fn):
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     aux, grad = grad_fn(optimizer.target)
     # Re-use same axis_name as in the call to `pmap(...train_step...)` below.
-    grad = lax.pmean(grad, axis_name='batch')
   new_model_state, logits = aux[1]
   new_optimizer = optimizer.apply_gradient(grad, learning_rate=lr)
   metrics = compute_metrics(logits, batch['label'])
@@ -171,9 +169,8 @@ def prepare_tf_data(xs):
     # Use _numpy() for zero-copy conversion between TF and NumPy.
     x = x._numpy()  # pylint: disable=protected-access
 
-    # reshape (host_batch_size, height, width, 3) to
-    # (local_devices, device_batch_size, height, width, 3)
-    return x.reshape((local_device_count, -1) + x.shape[1:])
+    # return (host_batch_size, height, width, 3)
+    return x
 
   return jax.tree_map(_prepare, xs)
 
@@ -184,7 +181,6 @@ def create_input_iter(dataset_builder, batch_size, image_size, dtype, train,
       dataset_builder, batch_size, image_size=image_size, dtype=dtype,
       train=train, cache=cache)
   it = map(prepare_tf_data, ds)
-  it = jax_utils.prefetch_to_device(it, 2)
   return it
 
 
@@ -309,17 +305,13 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   state = restore_checkpoint(state, workdir)
   # step_offset > 0 if restarting from checkpoint
   step_offset = int(state.step)
-  state = jax_utils.replicate(state)
 
   learning_rate_fn = create_learning_rate_fn(
       config, base_learning_rate, steps_per_epoch)
 
-  p_train_step = jax.pmap(
-      functools.partial(train_step, model.apply,
-                        learning_rate_fn=learning_rate_fn),
-      axis_name='batch', donate_argnums=[0])
-  p_eval_step = jax.pmap(
-      functools.partial(eval_step, model.apply), axis_name='batch', donate_argnums=[0])
+  p_train_step = jax.jit(functools.partial(train_step, model.apply,
+                        learning_rate_fn=learning_rate_fn), donate_argnums=[0])
+  p_eval_step = jax.jit(functools.partial(eval_step, model.apply))
 
   epoch_metrics = []
   hooks = []
@@ -336,7 +328,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     epoch_metrics.append(metrics)
     if (step + 1) % steps_per_epoch == 0:
       epoch = step // steps_per_epoch
-      epoch_metrics = common_utils.get_metrics(epoch_metrics)
+      epoch_metrics = common_utils.get_metrics_single_device(epoch_metrics)
       summary = jax.tree_map(lambda x: x.mean(), epoch_metrics)
       logging.info('train epoch: %d, loss: %.4f, accuracy: %.2f',
                    epoch, summary['loss'], summary['accuracy'] * 100)
@@ -352,13 +344,11 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
       epoch_metrics = []
       eval_metrics = []
 
-      # sync batch statistics across replicas
-      state = sync_batch_stats(state)
       for _ in range(steps_per_eval):
         eval_batch = next(eval_iter)
         metrics = p_eval_step(state, eval_batch)
         eval_metrics.append(metrics)
-      eval_metrics = common_utils.get_metrics(eval_metrics)
+      eval_metrics = common_utils.get_metrics_single_device(eval_metrics)
       summary = jax.tree_map(lambda x: x.mean(), eval_metrics)
       logging.info('eval epoch: %d, loss: %.4f, accuracy: %.2f',
                    epoch, summary['loss'], summary['accuracy'] * 100)
@@ -368,7 +358,6 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
           summary_writer.scalar(tag, val.mean(), step)
         summary_writer.flush()
     if (step + 1) % steps_per_checkpoint == 0 or step + 1 == num_steps:
-      state = sync_batch_stats(state)
       save_checkpoint(state, workdir)
 
   # Wait until computations are done before exiting
