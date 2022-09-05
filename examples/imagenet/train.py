@@ -57,12 +57,12 @@ def create_model(*, model_cls, half_precision, **kwargs):
       model_dtype = jnp.float16
   else:
     model_dtype = jnp.float32
-  return model_cls(num_classes=1000, dtype=model_dtype, **kwargs)
+  return model_cls(num_classes=10, dtype=model_dtype, **kwargs)
 
 
 def initialized(key, image_size, model):
   input_shape = (1, image_size, image_size, 3)
-  @jax.jit
+  @functools.partial(jax.jit, backend='cpu')
   def init(*args):
     return model.init(*args)
   variables = init({'params': key}, jnp.ones(input_shape, model.dtype))
@@ -72,7 +72,7 @@ def initialized(key, image_size, model):
 
 def cross_entropy_loss(logits, labels):
   return -jnp.sum(
-      common_utils.onehot(labels, num_classes=1000) * logits) / labels.size
+      common_utils.onehot(labels, num_classes=10) * logits) / labels.size
 
 
 def compute_metrics(logits, labels):
@@ -273,6 +273,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     input_dtype = tf.float32
 
   dataset_builder = tfds.builder(config.dataset)
+  dataset_builder.download_and_prepare()
   train_iter = create_input_iter(
       dataset_builder, local_batch_size, image_size, input_dtype, train=True,
       cache=config.cache)
@@ -316,9 +317,9 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   p_train_step = jax.pmap(
       functools.partial(train_step, model.apply,
                         learning_rate_fn=learning_rate_fn),
-      axis_name='batch')
+      axis_name='batch', backend="ipu")
   p_eval_step = jax.pmap(
-      functools.partial(eval_step, model.apply), axis_name='batch')
+      functools.partial(eval_step, model.apply), axis_name='batch', backend="ipu")
 
   epoch_metrics = []
   hooks = []
