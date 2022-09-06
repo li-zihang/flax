@@ -233,8 +233,7 @@ def create_train_state(rng, config: ml_collections.ConfigDict,
     dynamic_scale = None
 
   params, model_state = initialized(rng, image_size, model)
-  optimizer = optim.Momentum(
-      beta=config.momentum, nesterov=True).create(params)
+  optimizer = optim.GradientDescent().create(params)
   state = TrainState(
       step=0, optimizer=optimizer, model_state=model_state,
       dynamic_scale=dynamic_scale)
@@ -317,9 +316,10 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   p_train_step = jax.pmap(
       functools.partial(train_step, model.apply,
                         learning_rate_fn=learning_rate_fn),
-      axis_name='batch', backend="ipu")
+      axis_name='batch', backend="ipu", donate_argnums=[0])
   p_eval_step = jax.pmap(
-      functools.partial(eval_step, model.apply), axis_name='batch', backend="ipu")
+      functools.partial(eval_step, model.apply), axis_name='batch', backend="ipu",
+                        donate_argnums=[0])
 
   epoch_metrics = []
   hooks = []
