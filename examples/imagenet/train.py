@@ -21,9 +21,9 @@ The data is loaded using tensorflow_datasets.
 import functools
 import time
 from typing import Any
+import threading
 
 from absl import logging
-from clu import periodic_actions
 
 import flax
 from flax import optim
@@ -47,6 +47,20 @@ import ml_collections
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
+class MyThread(threading.Thread):
+    def __init__(self, func, args=()):
+        super(MyThread, self).__init__()
+        self.func = func
+        self.args = args
+    def run(self):
+        time.sleep(2)
+        self.result = self.func(*self.args)
+    def get_result(self):
+        threading.Thread.join(self)
+        try:
+            return self.result
+        except Exception:
+            return None
 
 def create_model(*, model_cls, half_precision, **kwargs):
   platform = jax.local_devices()[0].platform
@@ -203,7 +217,7 @@ def restore_checkpoint(state, workdir):
 def save_checkpoint(state, workdir):
   if jax.host_id() == 0:
     # get train state from the first replica
-    state = jax.device_get(jax.tree_map(lambda x: x[0], state))
+    state = jax.device_get(state)
     step = int(state.step)
     checkpoints.save_checkpoint(workdir, state, step, keep=3)
 
@@ -349,18 +363,16 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   epoch_metrics = []
   for epoch in range(int(config.num_epochs)):
     # Train start...
+    # Train thread, calls a fori_loop
+    execution_train = MyThread(train_loops, args=(epoch * steps_per_epoch,
+      (epoch + 1)* steps_per_epoch, state))
+    execution_train.start()
     t_loop_start = time.time()
     
-    # Prepare infeed data
+    # Main program loop, infeed and outfeed data
     for _, batch in zip(range(steps_per_epoch), train_iter):
       batch = tuple(batch.values())
       device.transfer_to_infeed(batch)
-    
-    # Main program loop
-    state = train_loops(epoch * steps_per_epoch, (epoch + 1) * steps_per_epoch, state)
-
-    # Get outfeed data
-    for _ in range(steps_per_epoch):
       train_acc, train_loss = device.transfer_from_outfeed(xla_client.shape_from_pyval((x, y))
                                           .with_major_to_minor_layout_if_absent())
       epoch_metrics.append({"loss":train_loss, "accuracy":train_acc})
@@ -369,6 +381,10 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     summary = jax.tree_map(lambda x: x.mean(), epoch_metrics)
     logging.info('train epoch: %d, loss: %.4f, accuracy: %.2f',
                   epoch, summary['loss'], summary['accuracy'] * 100)
+    
+    # Get new_state and update to state
+    execution_train.join()
+    state = execution_train.get_result()
     epoch_time = time.time() - t_loop_start
     logging.info("Train epoch %d in %.2f sec", epoch, epoch_time)
 
@@ -376,18 +392,15 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     eval_metrics = []
 
     # Eval start...
+    # Eval thread, calls a fori_loop
+    execution_eval = MyThread(eval_loops, args=(0, steps_per_eval, state))
+    execution_eval.start()
     e_loop_start = time.time()
 
-    # Prepare infeed data
+    # Main program loop, infeed and outfeed data
     for _, batch in zip(range(steps_per_eval), eval_iter):
       batch = tuple(batch.values())
       device.transfer_to_infeed(batch)
-    
-    # Main program loop
-    state = eval_loops(0, steps_per_eval, state)
-
-    # Get outfeed data
-    for _ in range(steps_per_eval):
       eval_acc, eval_loss = device.transfer_from_outfeed(xla_client.shape_from_pyval((x, y))
                                         .with_major_to_minor_layout_if_absent())
       eval_metrics.append({"loss":eval_loss, "accuracy":eval_acc})
@@ -396,6 +409,8 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     summary = jax.tree_map(lambda x: x.mean(), eval_metrics)
     logging.info('eval epoch: %d, loss: %.4f, accuracy: %.2f',
                   epoch, summary['loss'], summary['accuracy'] * 100)
+    
+    execution_eval.join()
     eval_time = time.time() - e_loop_start
     logging.info("Eval epoch %d in %.2f sec", epoch, eval_time)
    
