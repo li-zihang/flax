@@ -22,6 +22,7 @@ import functools
 import time
 from typing import Any
 import threading
+import numpy as np
 
 from absl import logging
 
@@ -46,6 +47,9 @@ import ml_collections
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
+
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import MultipleLocator
 
 class MyThread(threading.Thread):
     def __init__(self, func, args=()):
@@ -318,7 +322,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
       model_cls=model_cls, half_precision=config.half_precision)
 
   state = create_train_state(rng, config, model, image_size)
-  state = restore_checkpoint(state, workdir)
+  # state = restore_checkpoint(state, workdir)
   # step_offset > 0 if restarting from checkpoint
   step_offset = int(state.step)
 
@@ -364,13 +368,16 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
   device = jax.devices(backend='gpu')[0]
 
   epoch_metrics = []
+  epoch_times, train_losses, train_acces = [np.zeros(int(config.num_epochs)) for _ in range(3)]
+  eval_times, eval_losses, eval_acces = [np.zeros(int(config.num_epochs)) for _ in range(3)]
+
+  t_loop_start = time.time() 
   logging.info('Initial compilation, this might take some minutes...')
   for epoch in range(int(config.num_epochs)):
     # Train thread, calls a fori_loop
     execution_train = MyThread(train_loops, args=(epoch * steps_per_epoch,
       (epoch + 1)* steps_per_epoch, state))
     execution_train.start()
-    t_loop_start = time.time()
     
     # Main program loop, infeed and outfeed data
     for _, batch in zip(range(steps_per_epoch), train_iter):
@@ -389,6 +396,11 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     execution_train.join()
     state = execution_train.get_result()
     epoch_time = time.time() - t_loop_start
+    
+    epoch_times[epoch] = epoch_time
+    train_losses[epoch] = summary['loss']
+    train_acces[epoch] = summary['accuracy']*100
+
     logging.info("Train epoch %d in %.2f sec", epoch, epoch_time)
 
     epoch_metrics = []
@@ -397,7 +409,6 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
     # Eval thread, calls a fori_loop
     execution_eval = MyThread(eval_loops, args=(0, steps_per_eval, state))
     execution_eval.start()
-    e_loop_start = time.time()
 
     # Main program loop, infeed and outfeed data
     for _, batch in zip(range(steps_per_eval), eval_iter):
@@ -413,7 +424,12 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
                   epoch, summary['loss'], summary['accuracy'] * 100)
     
     execution_eval.join()
-    eval_time = time.time() - e_loop_start
+    eval_time = time.time() - t_loop_start
+    
+    eval_losses[epoch] = epoch_time
+    eval_acces[epoch] = summary['loss']
+    eval_times[epoch] = summary['accuracy']*100
+    
     logging.info("Eval epoch %d in %.2f sec", epoch, eval_time)
     
     if (epoch + 1) % 10 == 0:
@@ -421,5 +437,9 @@ def train_and_evaluate(config: ml_collections.ConfigDict,
 
   # Wait until computations are done before exiting
   jax.random.normal(jax.random.PRNGKey(0), ()).block_until_ready()
+
+  # save wall-clock info
+  np.savez("gpu_wall_clock_info.npz", epoch_times=epoch_times, train_losses=train_losses,
+    train_acces=train_acces, eval_times=eval_times, eval_losses=eval_losses, eval_acces=eval_acces)
 
   return state
